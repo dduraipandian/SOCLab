@@ -1,0 +1,4 @@
+# Made-up cloud access keys and the source IPs each has been seen from.
+keys:
+  - {key_id: AKNIMBUS0001, user: arun.m,    known_ips: [198.51.100.10]}
+  - {key_id: AKNIMBUS0002, user: svc-maint, known_ips: [198.51.100.11]}

@@ -1,0 +1,9 @@
+{"id": "det-41", "ts_ms": 1794049800123, "host": "build-01", "name": "sensitive_file_read", "technique": "T1003.008",
+ "severity": 75,
+ "process": {"cmdline": "awk -F: {print $1, $5} /etc/shadow", "user": "svc-maint", "pid": 311,
+             "parent_cmdline": "/bin/bash /opt/maint/nightly.sh",
+             "lineage": [{"cmdline": "/bin/bash /opt/maint/nightly.sh", "user": "svc-maint", "pid": 310},
+                         {"cmdline": "/usr/sbin/cron", "user": "root", "pid": 309},
+                         {"cmdline": "/usr/sbin/cron", "user": "root", "pid": 40},
+                         {"cmdline": "sleep infinity", "user": "root", "pid": 1}]},
+ "net": null, "file": {"path": "/etc/shadow", "op": "read"}}

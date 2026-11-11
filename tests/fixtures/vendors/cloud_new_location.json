@@ -1,0 +1,3 @@
+{"eventId": "1b2c3d4e-0000-4000-8000-000000000009", "eventTime": "2026-11-07T04:00:00.000Z",
+ "eventName": "Security.NewLocationAccountCreation",
+ "userIdentity": {"accessKeyId": "AKNIMBUS0001", "userName": "arun.m"}, "sourceIPAddress": "203.0.113.77"}

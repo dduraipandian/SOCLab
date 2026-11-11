@@ -1,0 +1,3 @@
+{"uuid": "6c1f3a2e-2b7d-4b8e-9a51-0c3d1f2e4a10", "published": "2026-11-07T04:00:00+00:00",
+ "eventType": "security.mfa_fatigue", "severity": "high", "actor": {"alternateId": "priya.k"},
+ "client": {"ipAddress": "203.0.113.77", "geo": {"country": "RO"}}, "outcome": {"result": "SUCCESS"}}

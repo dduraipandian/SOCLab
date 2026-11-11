@@ -1,0 +1,7 @@
+# Made-up directory. usual_country drives the new-country checks.
+users:
+  - {user: priya.k,   department: finance,     usual_country: IN, vip: false}
+  - {user: arun.m,    department: engineering, usual_country: IN, vip: false}
+  - {user: meera.s,   department: hr,          usual_country: IN, vip: false}
+  - {user: svc-maint, department: it,          usual_country: IN, vip: false}
+  - {user: ravi.c,    department: exec,        usual_country: IN, vip: true}

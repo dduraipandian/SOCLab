@@ -1,0 +1,185 @@
+name: soc-lab
+
+# Fake vendors (EDR, IdP, cloud), five hosts with sensors, c2-sim and attack scenarios S1-S8.
+#
+# Profiles:  (none)  postgres + the three vendors (localhost:8101-8103)
+#            hosts   five hosts with sensors, egress gateway, c2-sim, scenario runner
+#
+# Other projects reach the vendors on localhost:8101-8103 from the Mac, or by service name
+# (sentrix-edr:8000, ...) by joining the external network `soc-lab-net` from their own compose file.
+
+x-python-service: &python-service
+  image: soc-lab-python
+  build: {context: .}
+  networks: [svc-net]
+  restart: unless-stopped
+
+x-vendor-env: &vendor-env
+  DATABASE_URL: postgresql://${POSTGRES_USER:-soc}:${POSTGRES_PASSWORD:-soc}@postgres:5432/${POSTGRES_DB:-soc}
+  VENDOR_API_KEYS: ${VENDOR_API_KEYS:-feed-key:feed;agent-key:read;exec-key:respond;sensor-key:ingest}
+  FAULT_RATE_429: ${FAULT_RATE_429:-0}
+  FAULT_RATE_500: ${FAULT_RATE_500:-0}
+  ACTION_FAIL_RATE: ${ACTION_FAIL_RATE:-0}
+
+x-host-service: &host-service
+  image: soc-lab-host
+  build: assets/host
+  profiles: [hosts]
+  cap_add: [NET_ADMIN]
+  depends_on: [sentrix-edr, egress-gw]
+  restart: unless-stopped
+  mem_limit: 64m
+
+x-host-env: &host-env
+  SENSOR_EDR_URL: http://sentrix-edr:8000/v2/telemetry
+  SENSOR_API_KEY: ${SENSOR_API_KEY:-sensor-key}
+  EGRESS_GW_IP: 10.20.0.2
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-soc}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-soc}
+      POSTGRES_DB: ${POSTGRES_DB:-soc}
+    ports: ["127.0.0.1:5432:5432"]
+    volumes: ["./infra/postgres/init:/docker-entrypoint-initdb.d:ro"]
+    networks: [svc-net]
+    mem_limit: 384m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-soc} -d ${POSTGRES_DB:-soc}"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+
+  sentrix-edr:
+    <<: *python-service
+    command: ["uvicorn", "--factory", "vendors.sentrix_edr.app:create_app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      <<: *vendor-env
+      EDR_NETWORK_CONTROLLER: docker
+      EDR_CORP_NETWORK: corp-net
+      EDR_HOST_CORP_IPS: fin-laptop-07=10.20.0.11,eng-ws-03=10.20.0.12,hr-laptop-02=10.20.0.13,web-srv-01=10.20.0.14,build-01=10.20.0.15
+    volumes: ["/var/run/docker.sock:/var/run/docker.sock"]
+    sysctls: {net.ipv4.ip_forward: 0}
+    ports: ["127.0.0.1:8101:8000"]
+    networks:
+      svc-net: {}
+      mgmt-fin-laptop-07: {}
+      mgmt-eng-ws-03: {}
+      mgmt-hr-laptop-02: {}
+      mgmt-web-srv-01: {}
+      mgmt-build-01: {}
+    depends_on:
+      postgres: {condition: service_healthy}
+    mem_limit: 160m
+
+  keyline-idp:
+    <<: *python-service
+    command: ["uvicorn", "--factory", "vendors.keyline_idp.app:create_app", "--host", "0.0.0.0", "--port", "8000"]
+    environment: *vendor-env
+    ports: ["127.0.0.1:8102:8000"]
+    depends_on:
+      postgres: {condition: service_healthy}
+    mem_limit: 128m
+
+  nimbus-cloud:
+    <<: *python-service
+    command: ["uvicorn", "--factory", "vendors.nimbus_cloud.app:create_app", "--host", "0.0.0.0", "--port", "8000"]
+    environment: *vendor-env
+    ports: ["127.0.0.1:8103:8000"]
+    depends_on:
+      postgres: {condition: service_healthy}
+    mem_limit: 128m
+
+  scenario-runner:
+    <<: *python-service
+    profiles: [hosts]
+    command: ["sleep", "infinity"]
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-soc}:${POSTGRES_PASSWORD:-soc}@postgres:5432/${POSTGRES_DB:-soc}
+      IDP_URL: http://keyline-idp:8000
+      CLOUD_URL: http://nimbus-cloud:8000
+      INGEST_API_KEY: ${SENSOR_API_KEY:-sensor-key}
+    volumes: ["/var/run/docker.sock:/var/run/docker.sock"]
+    mem_limit: 96m
+
+  egress-gw:
+    build: assets/egress_gw
+    image: soc-lab-egress-gw
+    profiles: [hosts]
+    cap_add: [NET_ADMIN]
+    sysctls: {net.ipv4.ip_forward: 1}
+    networks:
+      corp-net: {ipv4_address: 10.20.0.2}
+      internet-net: {ipv4_address: 203.0.113.2}
+    mem_limit: 32m
+
+  c2-sim:
+    image: python:3.12-slim
+    profiles: [hosts]
+    command: ["python", "/app/app.py"]
+    volumes: ["./assets/c2_sim:/app:ro"]
+    networks:
+      internet-net: {ipv4_address: 203.0.113.50}
+    mem_limit: 64m
+
+  fin-laptop-07:
+    <<: *host-service
+    container_name: fin-laptop-07
+    hostname: fin-laptop-07
+    environment: {<<: *host-env, SENSOR_HOST: fin-laptop-07}
+    networks:
+      corp-net: {ipv4_address: 10.20.0.11}
+      mgmt-fin-laptop-07: {}
+
+  eng-ws-03:
+    <<: *host-service
+    container_name: eng-ws-03
+    hostname: eng-ws-03
+    environment: {<<: *host-env, SENSOR_HOST: eng-ws-03}
+    networks:
+      corp-net: {ipv4_address: 10.20.0.12}
+      mgmt-eng-ws-03: {}
+
+  hr-laptop-02:
+    <<: *host-service
+    container_name: hr-laptop-02
+    hostname: hr-laptop-02
+    environment: {<<: *host-env, SENSOR_HOST: hr-laptop-02}
+    networks:
+      corp-net: {ipv4_address: 10.20.0.13}
+      mgmt-hr-laptop-02: {}
+
+  web-srv-01:
+    <<: *host-service
+    container_name: web-srv-01
+    hostname: web-srv-01
+    environment: {<<: *host-env, SENSOR_HOST: web-srv-01}
+    networks:
+      corp-net: {ipv4_address: 10.20.0.14}
+      mgmt-web-srv-01: {}
+
+  build-01:
+    <<: *host-service
+    container_name: build-01
+    hostname: build-01
+    environment: {<<: *host-env, SENSOR_HOST: build-01}
+    networks:
+      corp-net: {ipv4_address: 10.20.0.15}
+      mgmt-build-01: {}
+
+networks:
+  svc-net:
+    name: soc-lab-net
+  corp-net:
+    name: corp-net
+    ipam: {config: [{subnet: 10.20.0.0/24}]}
+  internet-net:
+    name: internet-net
+    ipam: {config: [{subnet: 203.0.113.0/24}]}
+  mgmt-fin-laptop-07: {name: mgmt-fin-laptop-07, internal: true}
+  mgmt-eng-ws-03: {name: mgmt-eng-ws-03, internal: true}
+  mgmt-hr-laptop-02: {name: mgmt-hr-laptop-02, internal: true}
+  mgmt-web-srv-01: {name: mgmt-web-srv-01, internal: true}
+  mgmt-build-01: {name: mgmt-build-01, internal: true}
