@@ -45,6 +45,7 @@ The IdP and cloud vendors have no machines behind them: the scenario runner post
 ## Run it
 
 Needs Docker and [uv](https://docs.astral.sh/uv/). Ports used: 5432, 8101–8103.
+If 5432 is taken, publish Postgres on another port: `POSTGRES_PORT=5433 make up`.
 
 ```bash
 make up                 # build and start everything (first build takes a few minutes)
@@ -186,7 +187,7 @@ returns the same `action_id`.
 
 ## Connecting your own services
 
-From the Mac, use `localhost:8101`–`8103` and Postgres on `localhost:5432` (user `soc`, password `soc`;). 
+From the Mac, use `localhost:8101`–`8103` and Postgres on `localhost:5432` (or your `POSTGRES_PORT`) (user `soc`, password `soc`;). 
 
 Join the lab's network to use the service
 names (`http://sentrix-edr:8000`):
@@ -204,5 +205,5 @@ networks:
 | Symptom | Fix |
 |---|---|
 | `container name "/build-01" is already in use`, or a network already exists | Another stack owns those names, even while stopped. Remove its containers and networks, then `make up`. |
-| `port is already allocated` | Something else uses 5432 or 8101–8103. Stop it. |
+| `port is already allocated` | Something else uses 5432 or 8101–8103. Stop it, or for Postgres set `POSTGRES_PORT` to a free port. |
 | No detections after a scenario | Check the sensor: `docker exec build-01 tail /var/log/sensor.log`. S6 needs about a minute. |
