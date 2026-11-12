@@ -28,7 +28,7 @@ def create_app(pool=None, schema: str = "edr", api_keys: str | None = None,
     def startup(app: FastAPI) -> None:
         nonlocal pool, controller
         if pool is None:
-            from common.db import pool as make_pool
+            from vendors.common.db import pool as make_pool
             pool = make_pool()
         controller = controller or _default_controller()
         store = EdrStore(pool, schema)

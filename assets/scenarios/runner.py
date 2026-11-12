@@ -102,7 +102,8 @@ def noise(docker, http, endpoints: Endpoints | None = None, rounds: int = 1, rng
 
 def main() -> None:
     import docker as docker_sdk
-    from common.db import pool
+
+    from vendors.common.db import pool
 
     parser = argparse.ArgumentParser(prog="scenario-runner")
     sub = parser.add_subparsers(dest="cmd", required=True)

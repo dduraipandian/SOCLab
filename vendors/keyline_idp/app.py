@@ -32,7 +32,7 @@ def create_app(pool=None, schema: str = "idp", api_keys: str | None = None,
     def startup(app: FastAPI) -> None:
         nonlocal pool
         if pool is None:
-            from common.db import pool as make_pool
+            from vendors.common.db import pool as make_pool
             pool = make_pool()
         store = IdpStore(pool, schema)
         store.ensure_tables()
