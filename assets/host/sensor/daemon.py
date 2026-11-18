@@ -13,6 +13,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import uuid
 from collections import deque
 from pathlib import Path
 
@@ -41,6 +42,10 @@ class Sender:
 
     Each buffered item carries a sequence number, so after a successful POST exactly the items that were
     sent are removed, even if the bounded buffer evicted old items while the request was in flight.
+
+    A batch that was not acknowledged is resent unchanged, with the same batch_id: the EDR may have stored it
+    and only the reply was lost, and the EDR ignores a batch_id it has already stored. New items wait for the
+    next batch, because a retry that carried them would be ignored along with the duplicate.
     """
 
     def __init__(self, url: str, key: str, host: str, max_events: int = BUFFER_MAX) -> None:
@@ -48,6 +53,7 @@ class Sender:
         self.events: deque = deque(maxlen=max_events)
         self.detections: deque = deque(maxlen=max_events)
         self.seq = 0
+        self.pending: tuple[bytes, int] | None = None  # (body, highest seq in it) until acknowledged
         self.lock = threading.Lock()
 
     def _push(self, buf: deque, item: dict) -> None:
@@ -60,14 +66,22 @@ class Sender:
             for d in detections:
                 self._push(self.detections, d)
 
+    def _next_batch(self) -> tuple[bytes, int] | None:
+        events, dets = list(self.events), list(self.detections)
+        if not events and not dets:
+            return None
+        sent_upto = max(item[-1][0] for item in (events, dets) if item)
+        body = json.dumps({"host": self.host, "batch_id": uuid.uuid4().hex, "events": [e for _, e in events],
+                           "detections": [d for _, d in dets]}).encode()
+        return body, sent_upto
+
     def flush(self) -> None:
         with self.lock:
-            events, dets = list(self.events), list(self.detections)
-        if not events and not dets:
-            return
-        sent_upto = max(item[-1][0] for item in (events, dets) if item)
-        body = json.dumps({"host": self.host, "events": [e for _, e in events],
-                           "detections": [d for _, d in dets]}).encode()
+            if self.pending is None:
+                self.pending = self._next_batch()
+            if self.pending is None:
+                return
+            body, sent_upto = self.pending
         req = urllib.request.Request(self.url, data=body, method="POST",
                                      headers={"Content-Type": "application/json", "X-Api-Key": self.key})
         try:
@@ -79,6 +93,7 @@ class Sender:
             done = False
         if done:
             with self.lock:
+                self.pending = None
                 for buf in (self.events, self.detections):
                     while buf and buf[0][0] <= sent_upto:
                         buf.popleft()

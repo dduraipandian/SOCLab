@@ -43,7 +43,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-soc}
       POSTGRES_DB: ${POSTGRES_DB:-soc}
     ports: ["127.0.0.1:${POSTGRES_PORT:-5432}:5432"]
-    volumes: ["./infra/postgres/init:/docker-entrypoint-initdb.d:ro"]
+    # Named, so `make down` + `make up` keeps the data; only `make reset` (down -v) deletes it.
+    volumes: ["pgdata:/var/lib/postgresql", "./infra/postgres/init:/docker-entrypoint-initdb.d:ro"]
     networks: [svc-net]
     mem_limit: 384m
     healthcheck:
@@ -169,14 +170,24 @@ services:
       corp-net: {ipv4_address: 10.20.0.15}
       mgmt-build-01: {}
 
+volumes:
+  pgdata:
+    name: soc-lab-pgdata
+
 networks:
+  # svc-net carries the published vendor and Postgres ports, so it cannot be internal; no lab host joins it.
   svc-net:
     name: soc-lab-net
+  # corp-net cannot be internal: Docker then drops every packet on it addressed outside 10.20.0.0/24, which
+  # includes host -> egress-gw -> c2-sim. Instead egress-gw forwards only to internet-net (its entrypoint),
+  # so a host's traffic to a real public address stops at the router.
   corp-net:
     name: corp-net
     ipam: {config: [{subnet: 10.20.0.0/24}]}
+  # internal: no route or NAT to the real internet for c2-sim or egress-gw's internet side.
   internet-net:
     name: internet-net
+    internal: true
     ipam: {config: [{subnet: 203.0.113.0/24}]}
   mgmt-fin-laptop-07: {name: mgmt-fin-laptop-07, internal: true}
   mgmt-eng-ws-03: {name: mgmt-eng-ws-03, internal: true}

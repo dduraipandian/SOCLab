@@ -92,3 +92,17 @@ def test_fresh_ip_placeholder_is_new_per_run():
         run(sc, FakeDocker(), http, FakePool(), Endpoints(idp="i", cloud="c", key="k"), sleep=lambda s: None)
         ips.append(log[0])
     assert ips[0] != ips[1] and all(ip.startswith("2001:db8:") for ip in ips)
+
+
+def test_s6_uses_its_own_cron_file_per_run():
+    from assets.scenarios.models import load
+    from assets.scenarios.runner import SCENARIOS
+    s6 = load(SCENARIOS)["S6"]
+    files = []
+    for _ in range(2):
+        docker = FakeDocker()
+        run(s6, docker, FakeHttp(docker.log), FakePool(), Endpoints(idp="i", cloud="c", key="k"), sleep=lambda s: None)
+        schedule, cleanup = (cmd for *_, cmd in docker.log)
+        files.append(cleanup.removeprefix("rm -f "))
+        assert f"> {files[-1]} " in schedule  # the cleanup removes the file this run created
+    assert files[0] != files[1] and all(f.startswith("/etc/cron.d/s6-") for f in files)

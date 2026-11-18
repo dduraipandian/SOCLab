@@ -74,7 +74,8 @@ def run(scenario: Scenario, docker, http, pool, endpoints: Endpoints | None = No
     """Execute the scenario's steps in order, then record the run and its expected outcome."""
     ep = endpoints or Endpoints.from_env()
     run_id, started = uuid.uuid4(), datetime.now(UTC)
-    values = {"fresh_ip": fresh_ip()}
+    # run_tag names per-run files (S6's cron entry); letters and digits only, as cron.d file names require
+    values = {"fresh_ip": fresh_ip(), "run_tag": run_id.hex[:12]}
     for step in (_substitute(s, values) for s in scenario.steps):
         if step.delay_s:
             sleep(step.delay_s)

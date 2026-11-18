@@ -5,7 +5,11 @@ attacker server, and three security vendors (EDR, identity provider, cloud) with
 S1–S8 play attacks and benign look-alikes against it, and the vendors turn them into alerts.
 
 Nothing here is real or reaches the real internet. The "internet" is a Docker network, the attacker is a
-container, and every IP is from a documentation range.
+container, and every IP is from a documentation range. `internet-net` is an internal Docker network with
+no route out, and `egress-gw` forwards host traffic only into it: traffic to a real public address is
+dropped at the router. (`corp-net` cannot be internal, because Docker would then drop the hosts' traffic to
+the fake internet too. A root user on a host who points its default route at corp-net's Docker gateway
+could still get out; no scenario does that.)
 
 ## What's in the lab
 
@@ -52,8 +56,12 @@ make up                 # build and start everything (first build takes a few mi
 make attack S=S6        # play one scenario
 make noise ROUNDS=3     # harmless background activity on every host and vendor
 make test               # unit tests (no Docker needed)
-make down               # stop; `make reset` also wipes all data
+make down               # stop; data stays in the soc-lab-pgdata volume. `make reset` wipes it
 ```
+
+Postgres keeps its data in the named volume `soc-lab-pgdata`, so `make down` then `make up` comes back with
+the same vendor history and ground truth. Changing a network's settings (such as `internal`) needs
+`make down` first, because Docker cannot change an existing network.
 
 Check it's up:
 
@@ -75,8 +83,9 @@ curl -s -H "X-Api-Key: agent-key" http://localhost:8101/v2/hosts/build-01
 | S7 | Many failed logins from one IP, none succeed | IdP | benign | none |
 | S8 | A command line carrying text aimed at an AI investigator | EDR | injection attempt | none |
 
-The exact commands are in `assets/scenarios/scenarios.yaml`. S6 takes about a minute: it schedules the
-nightly job to run within the next minute, then removes that entry after 65 seconds.
+The exact commands are in `assets/scenarios/scenarios.yaml`. S6 takes about 80 seconds: it schedules the
+nightly job for one specific minute 10–70 seconds ahead, so it runs exactly once and raises one alert, then
+removes that entry. Each run uses its own cron file, so overlapping S6 runs don't interfere.
 
 **History in a fresh lab.** No past activity is pre-loaded. Until the real 02:00 job has run on a few nights,
 `build-01` has no history of it, so a "has this run before?" lookup honestly finds one run. Leave the lab

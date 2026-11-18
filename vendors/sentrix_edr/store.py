@@ -41,6 +41,9 @@ class EdrStore:
                 CREATE INDEX IF NOT EXISTS telemetry_host_pid ON {self.s}.telemetry (host, pid, seq);
                 CREATE TABLE IF NOT EXISTS {self.s}.detections (
                     seq bigserial PRIMARY KEY, host text NOT NULL, ts_ms bigint NOT NULL, data jsonb NOT NULL);
+                CREATE TABLE IF NOT EXISTS {self.s}.batches (
+                    host text NOT NULL, batch_id text NOT NULL, received_at timestamptz NOT NULL,
+                    PRIMARY KEY (host, batch_id));
             """)
 
     def ingest(self, batch: TelemetryBatch) -> int:
@@ -50,6 +53,13 @@ class EdrStore:
             conn.execute(f"""INSERT INTO {self.s}.hosts (host, first_seen, last_seen) VALUES (%s, %s, %s)
                              ON CONFLICT (host) DO UPDATE SET last_seen = EXCLUDED.last_seen""",
                          (batch.host, now, now))
+            if batch.batch_id is not None:
+                # A sensor resends a batch whose reply it lost; the first copy was committed, so skip this one.
+                stored = conn.execute(f"INSERT INTO {self.s}.batches (host, batch_id, received_at) "
+                                      f"VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
+                                      (batch.host, batch.batch_id, now)).rowcount
+                if not stored:
+                    return 0
             with conn.cursor() as cur:
                 cur.executemany(
                     f"INSERT INTO {self.s}.telemetry (host, t, pid, ppid, kind, data) VALUES (%s, %s, %s, %s, %s, %s)",
@@ -88,15 +98,30 @@ class EdrStore:
                              ON CONFLICT (host) DO UPDATE SET contained = EXCLUDED.contained""",
                          (host, now, now, contained))
 
-    def _latest_exec(self, cur, host: str, pid: int) -> dict | None:
-        cur.execute(f"SELECT data FROM {self.s}.telemetry WHERE host = %s AND pid = %s AND kind IN ('exec', 'proc') "
-                    f"ORDER BY seq DESC LIMIT 1", (host, pid))
+    def _latest_exec(self, cur, host: str, pid: int, at: datetime | None = None) -> dict | None:
+        """The newest program `pid` ran, or the one it was running at `at`.
+
+        PIDs are reused, and start again from low numbers when a host restarts. So with `at`, the record must be
+        at or before `at` and from the same boot: the sensor records PID 1 as a `proc` event when it starts, and
+        a record older than the last such marker belongs to an earlier boot. A process the sensor never saw (for
+        example one started by `docker exec`) then has no record, instead of borrowing an older process's."""
+        sql = f"SELECT data FROM {self.s}.telemetry WHERE host = %s AND pid = %s AND kind IN ('exec', 'proc')"
+        args: list = [host, pid]
+        if at is not None:
+            sql += (f" AND t <= %s AND t >= COALESCE((SELECT max(t) FROM {self.s}.telemetry WHERE host = %s"
+                    f" AND pid = 1 AND kind = 'proc' AND t <= %s), '-infinity')")
+            args += [at, host, at]
+        cur.execute(sql + " ORDER BY t DESC, seq DESC LIMIT 1", args)
         row = cur.fetchone()
         return row["data"] if row else None
 
-    def process_tree(self, host: str, pid: int, depth: int = 6) -> dict | None:
+    def process_tree(self, host: str, pid: int, at_ms: int | None = None, depth: int = 6) -> dict | None:
+        """Lineage of `pid`. Pass `at_ms` (for example an alert's time) to get the process that had this PID
+        then rather than the newest one."""
+        # +1 ms: alert times are rounded to the millisecond, the process's own record is in microseconds
+        at = datetime.fromtimestamp((at_ms + 1) / 1000, UTC) if at_ms is not None else None
         with self.pool.connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-            ev = self._latest_exec(cur, host, pid)
+            ev = self._latest_exec(cur, host, pid, at)
             if ev is None:
                 return None
             node = {"cmdline": _cmdline(ev.get("argv"), ev["comm"]), "user": ev.get("user") or str(ev["uid"]),
@@ -104,12 +129,12 @@ class EdrStore:
             lineage, ppid, seen = [], ev["ppid"], {pid}
             while ppid and ppid not in seen and len(lineage) < depth:
                 seen.add(ppid)
-                parent = self._latest_exec(cur, host, ppid)
+                parent = self._latest_exec(cur, host, ppid, datetime.fromtimestamp(ev["t"], UTC))
                 if parent is None:
                     break
                 lineage.append({"cmdline": _cmdline(parent.get("argv"), parent["comm"]),
                                 "user": parent.get("user") or str(parent["uid"]), "pid": parent["pid"]})
-                ppid = parent["ppid"]
+                ev, ppid = parent, parent["ppid"]
         return {"process": node, "lineage": lineage}
 
     def search(self, host: str, contains: str | None, since_ms: int | None, limit: int) -> list[dict]:

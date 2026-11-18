@@ -68,8 +68,14 @@ scenarios:
       - type: exec
         host: build-01
         user: root
-        cmd: "echo '* * * * * svc-maint /bin/bash /opt/maint/nightly.sh' > /etc/cron.d/s6trigger && chmod 644 /etc/cron.d/s6trigger"
-      - {type: exec, host: build-01, user: root, cmd: "rm -f /etc/cron.d/s6trigger", delay_s: 65}
+        # Exactly one run: the job is scheduled for one specific minute, 10-70 s ahead (at least 10 s, so cron
+        # has read the file before that minute starts). Each run has its own file, so overlapping S6 runs do
+        # not delete each other's trigger.
+        cmd: >-
+          t=$(( $(date +%s) + 70 )); t=$(( t - t % 60 ));
+          echo "$(date -d @$t '+%M %H %d %m') * svc-maint /bin/bash /opt/maint/nightly.sh" > /etc/cron.d/s6-{run_tag}
+          && chmod 644 /etc/cron.d/s6-{run_tag}
+      - {type: exec, host: build-01, user: root, cmd: "rm -f /etc/cron.d/s6-{run_tag}", delay_s: 80}
     expected:
       verdict: benign
       action: null

@@ -142,6 +142,23 @@ def test_unreachable_edr_keeps_the_batch_for_retry():
         ep.close()
 
 
+def test_unacknowledged_batch_is_resent_unchanged_with_its_batch_id():
+    ep = Endpoint([503])
+    try:
+        s = Sender(ep.url, "k", "h")
+        s.add(ev(1), [{"name": "d1"}])
+        s.flush()  # the EDR may have stored it; only the reply is missing
+        s.add(ev(2), [])
+        s.flush()
+        s.flush()
+        first, retry, next_batch = ep.bodies
+        assert retry == first  # same batch_id and items, so the EDR can drop the duplicate
+        assert [e["pid"] for e in next_batch["events"]] == [2]
+        assert next_batch["batch_id"] != first["batch_id"]
+    finally:
+        ep.close()
+
+
 def test_sender_preserves_arrivals_during_flush_at_capacity():
     holder = {}
     ep = Endpoint([202], during_request=lambda: holder["s"].add(ev(99), [{"name": "late"}]))
