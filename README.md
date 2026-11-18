@@ -52,7 +52,7 @@ Needs Docker and [uv](https://docs.astral.sh/uv/). Ports used: 5432, 8101–8103
 If 5432 is taken, publish Postgres on another port: `POSTGRES_PORT=5433 make up`.
 
 ```bash
-make up                 # build and start everything (first build takes a few minutes)
+make up                 # build and wait for Postgres, the vendor APIs, and the host sensors
 make attack S=S6        # play one scenario
 make noise ROUNDS=3     # harmless background activity on every host and vendor
 make test               # unit tests (no Docker needed)
@@ -93,7 +93,12 @@ running overnight if you want a baseline.
 
 ### Ground truth
 
-Every run records what should be concluded:
+A completed run records its expected verdict in `pipeline.scenario_runs`. A nonzero host command
+exit, including a failure earlier in a shell pipeline, stops the run before that row is written.
+S4 requires a successful login through `POST /api/v1/scenarios/authn`. S5 requires an enabled key
+through `POST /api/scenarios/call`. Both endpoints audit denied attempts and return HTTP 409.
+Older vendors return HTTP 404 for these endpoints, so a partial rebuild cannot produce a scoring
+row for either scenario. Check the vendor feed separately to confirm which alerts arrived.
 
 ```bash
 docker compose exec postgres psql -U soc -d soc -c \
@@ -153,6 +158,8 @@ Actions are asynchronous, like real vendors:
 - The response is `202` with an `action_id` and `status: pending`. Poll the vendor's action endpoint
   (EDR: `/v2/actions/{id}`, IdP: `/api/v1/actions/{id}`, cloud: `/actions/{id}`).
 - Status goes `pending` → `running` (after about 1 s) → `succeeded` or `failed` (after about 3 s).
+- If the worker cannot record the result after dispatch, the next worker marks the action failed
+  with an unknown outcome. Verify the target's state before submitting another action.
 
 ### Faults
 

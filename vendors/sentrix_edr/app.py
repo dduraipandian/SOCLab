@@ -97,4 +97,3 @@ def create_app(pool=None, schema: str = "edr", api_keys: str | None = None,
         return get_action(request.app.state.actions, action_id)
 
     return app
-

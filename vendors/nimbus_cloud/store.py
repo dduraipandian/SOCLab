@@ -86,16 +86,17 @@ class CloudStore:
         conn.execute(f"INSERT INTO {self.s}.events (event_id, event_time, event_name, key_id, data) "
                      f"VALUES (%s, %s, %s, %s, %s)", (data["eventId"], now, name, key["key_id"], Jsonb(data)))
 
-    def call(self, key_id: str, action: str, ip: str, now: datetime | None = None) -> bool:
+    def call(self, key_id: str, action: str, ip: str, now: datetime | None = None) -> bool | None:
+        """Return whether the simulated action succeeded, or None for an unknown key."""
         now = now or datetime.now(UTC)
         with self.pool.connection() as conn, conn.transaction():
             take_feed_lock(conn, self.s)
             key = self._key(conn, key_id)  # read under the lock: known IPs cannot change underneath us
             if key is None:
-                return False
+                return None
             if key["disabled"]:
                 self._event(conn, now, action, key, ip, error="KeyDisabled")
-                return True
+                return False
             self._event(conn, now, action, key, ip)
             if action == "CreateUser" and ip not in key["known_ips"]:
                 self._event(conn, now, "Security.NewLocationAccountCreation", key, ip)

@@ -44,17 +44,20 @@ def _post(http, url: str, body: dict, key: str) -> None:
 
 def _step(step, docker, http, ep: Endpoints) -> None:
     if isinstance(step, Exec):
-        docker.containers.get(step.host).exec_run(["bash", "-c", step.cmd], user=step.user)
+        result = docker.containers.get(step.host).exec_run(["bash", "-o", "pipefail", "-c", step.cmd], user=step.user)
+        if result.exit_code != 0:
+            raise RuntimeError(f"Scenario step on {step.host} failed with exit code {result.exit_code}")
     elif isinstance(step, Authn):
+        path = "/api/v1/scenarios/authn" if step.password_ok else "/api/v1/authn"
         for _ in range(step.repeat):
-            _post(http, f"{ep.idp}/api/v1/authn", {"user": step.user, "password_ok": step.password_ok,
-                                                  "source_ip": step.source_ip, "country": step.country}, ep.key)
+            _post(http, f"{ep.idp}{path}", {"user": step.user, "password_ok": step.password_ok,
+                                          "source_ip": step.source_ip, "country": step.country}, ep.key)
     elif isinstance(step, MfaPush):
         for _ in range(step.repeat):
             _post(http, f"{ep.idp}/api/v1/mfa/push", {"user": step.user, "result": step.result}, ep.key)
     elif isinstance(step, CloudCall):
-        _post(http, f"{ep.cloud}/api/call", {"key_id": step.key_id, "action": step.action,
-                                            "source_ip": step.source_ip}, ep.key)
+        _post(http, f"{ep.cloud}/api/scenarios/call", {"key_id": step.key_id, "action": step.action,
+                                                      "source_ip": step.source_ip}, ep.key)
 
 
 def fresh_ip(rng: random.Random | None = None) -> str:
