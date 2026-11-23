@@ -58,5 +58,6 @@ class Detection(BaseModel):
 
 class TelemetryBatch(BaseModel):
     host: str
+    batch_id: str | None = Field(default=None, max_length=64)  # a resent batch_id is stored only once
     events: list[HookEvent] = Field(default_factory=list)
     detections: list[Detection] = Field(default_factory=list)

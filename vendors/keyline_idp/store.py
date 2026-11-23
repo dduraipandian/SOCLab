@@ -69,11 +69,11 @@ class IdpStore:
     def _count(self, conn, where: str, args: tuple) -> int:
         return conn.execute(f"SELECT count(*) FROM {self.s}.logs WHERE {where}", args).fetchone()[0]
 
-    def authn(self, now: datetime, user: str, password_ok: bool, ip: str, country: str) -> bool:
-        """Record a login attempt and run the detections. Returns False for an unknown user."""
+    def authn(self, now: datetime, user: str, password_ok: bool, ip: str, country: str) -> bool | None:
+        """Record a login attempt and return whether it succeeded, or None for an unknown user."""
         profile = self.user(user)
         if profile is None:
-            return False
+            return None
         if profile["suspended"]:
             outcome = {"result": "FAILURE", "reason": "USER_SUSPENDED"}
         elif password_ok:
@@ -88,7 +88,7 @@ class IdpStore:
                 self._maybe_fatigue(conn, now, user, ip, country)
             if outcome["result"] == "FAILURE":
                 self._maybe_brute_force(conn, now, user, ip, country)
-        return True
+        return outcome["result"] == "SUCCESS"
 
     def _burst_start(self, conn, where: str, args: tuple, n: int) -> datetime | None:
         """Time of the n-th most recent matching event: where the current burst begins."""

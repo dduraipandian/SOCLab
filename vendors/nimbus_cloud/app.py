@@ -17,6 +17,7 @@ class ApiCall(BaseModel):
     key_id: str
     action: Literal["ListBuckets", "GetObject", "CreateUser", "AttachPolicy"]
     source_ip: str
+    require_enabled: bool = False
 
 
 def create_app(pool=None, schema: str = "cloud", api_keys: str | None = None,
@@ -39,10 +40,21 @@ def create_app(pool=None, schema: str = "cloud", api_keys: str | None = None,
 
     app = build_app("nimbus-cloud", api_keys, startup, run_background)
 
+    def record_call(body: ApiCall, request: Request, require_enabled: bool) -> None:
+        succeeded = request.app.state.store.call(body.key_id, body.action, body.source_ip)
+        if succeeded is None:
+            raise HTTPException(status_code=404, detail="unknown key")
+        if require_enabled and not succeeded:
+            raise HTTPException(status_code=409, detail="KeyDisabled")
+
     @app.post("/api/call", status_code=202, dependencies=[Depends(require_scope("ingest"))])
     def api_call(body: ApiCall, request: Request):
-        if not request.app.state.store.call(body.key_id, body.action, body.source_ip):
-            raise HTTPException(status_code=404, detail="unknown key")
+        record_call(body, request, body.require_enabled)
+        return {"accepted": True}
+
+    @app.post("/api/scenarios/call", status_code=202, dependencies=[Depends(require_scope("ingest"))])
+    def scenario_call(body: ApiCall, request: Request):
+        record_call(body, request, require_enabled=True)
         return {"accepted": True}
 
     @app.get("/audit/events", dependencies=[Depends(require_scope("feed"))])

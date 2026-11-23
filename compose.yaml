@@ -14,6 +14,16 @@ x-python-service: &python-service
   networks: [svc-net]
   restart: unless-stopped
 
+x-vendor-healthcheck: &vendor-healthcheck
+  test:
+    - CMD
+    - python
+    - -c
+    - "from urllib.request import Request, urlopen; urlopen(Request('http://127.0.0.1:8000/health', method='HEAD'), timeout=2)"
+  interval: 2s
+  timeout: 3s
+  retries: 30
+
 x-vendor-env: &vendor-env
   DATABASE_URL: postgresql://${POSTGRES_USER:-soc}:${POSTGRES_PASSWORD:-soc}@postgres:5432/${POSTGRES_DB:-soc}
   VENDOR_API_KEYS: ${VENDOR_API_KEYS:-feed-key:feed;agent-key:read;exec-key:respond;sensor-key:ingest}
@@ -26,7 +36,14 @@ x-host-service: &host-service
   build: assets/host
   profiles: [hosts]
   cap_add: [NET_ADMIN]
-  depends_on: [sentrix-edr, egress-gw]
+  depends_on:
+    sentrix-edr: {condition: service_healthy}
+    egress-gw: {condition: service_started}
+  healthcheck:
+    test: ["CMD-SHELL", "ss -H -xl | grep -Fq /run/sensor/hook.sock && pgrep -x cron >/dev/null"]
+    interval: 2s
+    timeout: 3s
+    retries: 30
   restart: unless-stopped
   mem_limit: 64m
 
@@ -43,17 +60,19 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-soc}
       POSTGRES_DB: ${POSTGRES_DB:-soc}
     ports: ["127.0.0.1:${POSTGRES_PORT:-5432}:5432"]
-    volumes: ["./infra/postgres/init:/docker-entrypoint-initdb.d:ro"]
+    # Named, so `make down` + `make up` keeps the data; only `make reset` (down -v) deletes it.
+    volumes: ["pgdata:/var/lib/postgresql", "./infra/postgres/init:/docker-entrypoint-initdb.d:ro"]
     networks: [svc-net]
     mem_limit: 384m
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-soc} -d ${POSTGRES_DB:-soc}"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U ${POSTGRES_USER:-soc} -d ${POSTGRES_DB:-soc}"]
       interval: 3s
       timeout: 5s
       retries: 30
 
   sentrix-edr:
     <<: *python-service
+    healthcheck: *vendor-healthcheck
     command: ["uvicorn", "--factory", "vendors.sentrix_edr.app:create_app", "--host", "0.0.0.0", "--port", "8000"]
     environment:
       <<: *vendor-env
@@ -76,6 +95,7 @@ services:
 
   keyline-idp:
     <<: *python-service
+    healthcheck: *vendor-healthcheck
     command: ["uvicorn", "--factory", "vendors.keyline_idp.app:create_app", "--host", "0.0.0.0", "--port", "8000"]
     environment: *vendor-env
     ports: ["127.0.0.1:8102:8000"]
@@ -85,6 +105,7 @@ services:
 
   nimbus-cloud:
     <<: *python-service
+    healthcheck: *vendor-healthcheck
     command: ["uvicorn", "--factory", "vendors.nimbus_cloud.app:create_app", "--host", "0.0.0.0", "--port", "8000"]
     environment: *vendor-env
     ports: ["127.0.0.1:8103:8000"]
@@ -169,14 +190,24 @@ services:
       corp-net: {ipv4_address: 10.20.0.15}
       mgmt-build-01: {}
 
+volumes:
+  pgdata:
+    name: soc-lab-pgdata
+
 networks:
+  # svc-net carries the published vendor and Postgres ports, so it cannot be internal; no lab host joins it.
   svc-net:
     name: soc-lab-net
+  # corp-net cannot be internal: Docker then drops every packet on it addressed outside 10.20.0.0/24, which
+  # includes host -> egress-gw -> c2-sim. Instead egress-gw forwards only to internet-net (its entrypoint),
+  # so a host's traffic to a real public address stops at the router.
   corp-net:
     name: corp-net
     ipam: {config: [{subnet: 10.20.0.0/24}]}
+  # internal: no route or NAT to the real internet for c2-sim or egress-gw's internet side.
   internet-net:
     name: internet-net
+    internal: true
     ipam: {config: [{subnet: 203.0.113.0/24}]}
   mgmt-fin-laptop-07: {name: mgmt-fin-laptop-07, internal: true}
   mgmt-eng-ws-03: {name: mgmt-eng-ws-03, internal: true}

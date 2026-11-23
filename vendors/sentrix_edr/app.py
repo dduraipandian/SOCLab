@@ -70,8 +70,8 @@ def create_app(pool=None, schema: str = "edr", api_keys: str | None = None,
         return found
 
     @app.get("/v2/hosts/{host}/processes/{pid}/tree", dependencies=[Depends(require_scope("read"))])
-    def process_tree(host: str, pid: int, request: Request):
-        tree = request.app.state.store.process_tree(host, pid)
+    def process_tree(host: str, pid: int, request: Request, at_ms: int | None = None):
+        tree = request.app.state.store.process_tree(host, pid, at_ms)
         if tree is None:
             raise HTTPException(status_code=404, detail="unknown process")
         return tree
@@ -97,4 +97,3 @@ def create_app(pool=None, schema: str = "edr", api_keys: str | None = None,
         return get_action(request.app.state.actions, action_id)
 
     return app
-

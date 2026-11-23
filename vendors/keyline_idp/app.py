@@ -47,10 +47,21 @@ def create_app(pool=None, schema: str = "idp", api_keys: str | None = None,
 
     app = build_app("keyline-idp", api_keys, startup, run_background)
 
+    def record_authn(body: Authn, request: Request) -> bool:
+        succeeded = request.app.state.store.authn(clock(), body.user, body.password_ok, body.source_ip, body.country)
+        if succeeded is None:
+            raise HTTPException(status_code=404, detail="unknown user")
+        return succeeded
+
     @app.post("/api/v1/authn", status_code=202, dependencies=[Depends(require_scope("ingest"))])
     def authn(body: Authn, request: Request):
-        if not request.app.state.store.authn(clock(), body.user, body.password_ok, body.source_ip, body.country):
-            raise HTTPException(status_code=404, detail="unknown user")
+        record_authn(body, request)
+        return {"accepted": True}
+
+    @app.post("/api/v1/scenarios/authn", status_code=202, dependencies=[Depends(require_scope("ingest"))])
+    def scenario_authn(body: Authn, request: Request):
+        if not record_authn(body, request):
+            raise HTTPException(status_code=409, detail="LoginNotSuccessful")
         return {"accepted": True}
 
     @app.post("/api/v1/mfa/push", status_code=202, dependencies=[Depends(require_scope("ingest"))])

@@ -37,6 +37,10 @@ def build_app(title: str, api_keys: str | None, on_startup: Callable[[FastAPI], 
     app.state.api_keys = load_keys(api_keys if api_keys is not None else os.environ.get("VENDOR_API_KEYS", ""))
     app.add_middleware(FaultMiddleware, rate_429=env_float("FAULT_RATE_429"), rate_500=env_float("FAULT_RATE_500"),
                        retry_after=int(env_float("FAULT_RETRY_AFTER", 2)), rng=Random())
+    @app.head("/health", status_code=204)
+    def health() -> None:
+        pass
+
     return app
 
 

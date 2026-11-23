@@ -88,34 +88,56 @@ class ActionStore:
         return _record(row) if row else None
 
     def advance(self, now: datetime | None = None) -> None:
-        """pending -> running after 1 s; running -> succeeded | failed after 3 s (executor runs once)."""
+        """Advance actions, allowing only one worker to dispatch per vendor."""
         now = now or self.clock()
         with self.pool.connection() as conn:
-            conn.execute(f"UPDATE {self.table} SET status = 'running', updated_at = %s "
-                         f"WHERE status = 'pending' AND created_at <= %s", (now, now - RUNNING_AFTER))
-        while self._finish_one(now):
-            pass
+            lock = "hashtext('soc-lab action worker'), hashtext(%s)"
+            with conn.transaction():
+                acquired = conn.execute(f"SELECT pg_try_advisory_lock({lock})", (self.table,)).fetchone()[0]
+            if not acquired:
+                return
 
-    def _finish_one(self, now: datetime) -> bool:
-        with self.pool.connection() as conn, conn.transaction(), conn.cursor(row_factory=dict_row) as cur:
+            try:
+                with conn.transaction():
+                    conn.execute(f"UPDATE {self.table} SET status = 'failed', updated_at = %s, "
+                                 "failure_reason = 'execution outcome unknown; verify target state' "
+                                 "WHERE status = 'executing'", (now,))
+                    conn.execute(f"UPDATE {self.table} SET status = 'running', updated_at = %s "
+                                 "WHERE status = 'pending' AND created_at <= %s", (now, now - RUNNING_AFTER))
+                while self._finish_one(conn, now):
+                    pass
+            finally:
+                if not conn.closed:
+                    with conn.transaction():
+                        conn.execute(f"SELECT pg_advisory_unlock({lock})", (self.table,))
+
+    def _finish_one(self, conn, now: datetime) -> bool:
+        with conn.transaction(), conn.cursor(row_factory=dict_row) as cur:
             cur.execute(f"""SELECT * FROM {self.table}
                             WHERE status = 'running' AND created_at <= %s
-                            ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED""", (now - DONE_AFTER,))
+                            ORDER BY created_at, action_id LIMIT 1""", (now - DONE_AFTER,))
             row = cur.fetchone()
             if row is None:
                 return False
-            status, reason = "succeeded", None
-            if self.rng.random() < self.fail_rate:
-                status, reason = "failed", "vendor reported failure (simulated)"
-            else:
-                try:
-                    self.executor(row["action_type"], row["target"], row["body"])
-                except Exception as exc:  # noqa: BLE001 - the vendor reports the failure, it does not crash
-                    status, reason = "failed", f"execution error: {exc}"
-            cur.execute(f"UPDATE {self.table} SET status = %s, failure_reason = %s, updated_at = %s "
-                        f"WHERE action_id = %s", (status, reason, now, row["action_id"]))
-            return True
+            # Commit dispatch before the executor can change state outside this transaction.
+            cur.execute(f"UPDATE {self.table} SET status = 'executing' WHERE action_id = %s", (row["action_id"],))
+
+        status, reason = "succeeded", None
+        if self.rng.random() < self.fail_rate:
+            status, reason = "failed", "vendor reported failure (simulated)"
+        else:
+            try:
+                self.executor(row["action_type"], row["target"], row["body"])
+            except Exception as exc:  # noqa: BLE001 - the vendor reports the failure, it does not crash
+                status, reason = "failed", f"execution error: {exc}"
+        with conn.transaction():
+            conn.execute(f"UPDATE {self.table} SET status = %s, failure_reason = %s, updated_at = %s "
+                         "WHERE action_id = %s", (status, reason, now, row["action_id"]))
+        return True
 
 
 def _record(row: dict) -> ActionRecord:
-    return ActionRecord(**{k: row[k] for k in ActionRecord.__dataclass_fields__})
+    fields = {k: row[k] for k in ActionRecord.__dataclass_fields__}
+    if fields["status"] == "executing":
+        fields["status"] = "running"
+    return ActionRecord(**fields)

@@ -140,6 +140,55 @@ def test_process_tree_returns_lineage(client):
     assert [p["cmdline"] for p in tree["lineage"]] == ["/bin/bash /opt/maint/nightly.sh", "/usr/sbin/cron -f"]
 
 
+def test_resent_batch_is_stored_once(client):
+    body = {"host": "eng-ws-03", "batch_id": "b-1", "events": [exec_ev(39, 38, ["cat", "/etc/shadow"])],
+            "detections": [det(1)]}
+    for _ in range(2):
+        assert client.post("/v2/telemetry", headers=INGEST, json=body).status_code == 202
+    feed = client.get("/v2/detections", headers=FEED).json()
+    hits = client.get("/v2/telemetry/search", params={"host": "eng-ws-03"}, headers=READ).json()["events"]
+    assert len(feed["detections"]) == 1 and len(hits) == 1
+
+
+def boot(t: float) -> dict:
+    """What the sensor records first on every host start: PID 1, as a proc event."""
+    return exec_ev(1, 0, ["/bin/bash", "/entrypoint.sh"], user="root", t=t) | {"kind": "proc"}
+
+
+def test_process_tree_survives_pid_reuse(client):
+    t = 1794049800.0
+    ingest(client, host="eng-ws-03", events=[
+        boot(t - 60),
+        exec_ev(32, 1, ["bash"], user="arun.m", t=t),
+        exec_ev(38, 32, ["sudo", "-n", "cat", "/etc/shadow"], user="arun.m", t=t + 1),
+        exec_ev(39, 38, ["cat", "/etc/shadow"], user="root", t=t + 2.760018),
+        # after a restart, cron gets PID 32
+        boot(t + 3000),
+        exec_ev(32, 31, ["run-parts", "--report", "/etc/cron.hourly"], user="root", t=t + 3600),
+    ])
+    tree = client.get("/v2/hosts/eng-ws-03/processes/39/tree", headers=READ).json()
+    assert [p["cmdline"] for p in tree["lineage"]] == ["sudo -n cat /etc/shadow", "bash", "/bin/bash /entrypoint.sh"]
+
+    # PID 39 reused after the restart, by a process whose parent the sensor never saw (started by docker exec)
+    ingest(client, host="eng-ws-03", events=[exec_ev(39, 12, ["grep"], user="root", t=t + 7200)])
+    latest = client.get("/v2/hosts/eng-ws-03/processes/39/tree", headers=READ).json()
+    assert latest["process"]["cmdline"] == "grep" and latest["lineage"] == []
+
+    alert_ms = round((t + 2.762) * 1000)  # an alert's time is in ms, and a little after its process started
+    at_alert = client.get("/v2/hosts/eng-ws-03/processes/39/tree", params={"at_ms": alert_ms}, headers=READ).json()
+    assert at_alert["process"]["cmdline"] == "cat /etc/shadow"
+
+
+def test_process_tree_ignores_records_from_an_earlier_boot(client):
+    t = 1794049800.0
+    ingest(client, host="eng-ws-03", events=[
+        boot(t), exec_ev(32, 1, ["run-parts", "--report", "/etc/cron.hourly"], user="root", t=t + 10),
+        boot(t + 3000), exec_ev(39, 32, ["grep", "-Fq", "/run/sensor/hook.sock"], user="root", t=t + 3010),
+    ])
+    tree = client.get("/v2/hosts/eng-ws-03/processes/39/tree", headers=READ).json()
+    assert tree["lineage"] == []  # PID 32 of the earlier boot is not this grep's parent
+
+
 def test_telemetry_search(client):
     ingest(client, host="build-01", events=[exec_ev(11, 10, ["awk", "-F:", "{print $1}", "/etc/shadow"]),
                                             exec_ev(12, 10, ["ls", "/tmp"])])
